@@ -9,6 +9,7 @@ import { MasterTable } from './components/MasterTable';
 import { calculateProbationDate, calculateConfirmationDate, enrichEmployeeRecord } from './companyCodes';
 import { calculateEmployeeTotalExperience } from './utils/experienceCalculator';
 import { applySortedBulletedFormatting } from './utils/listFormatter';
+import { API_BASE_URL } from './config';
 
 function ensureEnrichedRecord(rec: MasterEmployeeRecord): MasterEmployeeRecord {
   const prb = (rec.PRB_DT && rec.PRB_DT !== '-')
@@ -71,7 +72,7 @@ export default function App() {
   useEffect(() => {
     const fetchRecords = async () => {
       try {
-        const res = await fetch('/api/employees');
+        const res = await fetch(`${API_BASE_URL}/employees`);
         if (res.ok) {
           const data = await res.json();
           if (data.success && Array.isArray(data.records)) {
@@ -150,7 +151,7 @@ export default function App() {
         const timeoutId = setTimeout(() => controller.abort(new Error('Timeout: Processing took longer than 5 minutes')), 300000); // 300 second timeout per attempt
 
         try {
-          res = await fetch('/api/extract', {
+          res = await fetch(`${API_BASE_URL}/extract`, {
             method: 'POST',
             body: formData,
             headers: {
@@ -294,7 +295,7 @@ export default function App() {
     setRecords(prev => prev.map(r => (r.id === enriched.id ? enriched : r)));
     
     try {
-      await fetch(`/api/employees/${enriched.id}`, {
+      await fetch(`${API_BASE_URL}/employees/${enriched.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(enriched)
@@ -321,7 +322,7 @@ export default function App() {
     }
 
     try {
-      await fetch(`/api/employees/${id}`, { method: 'DELETE' });
+      await fetch(`${API_BASE_URL}/employees/${id}`, { method: 'DELETE' });
       showToast('Record deleted.');
     } catch (err) {
       console.error('Error deleting from DB:', err);
@@ -342,7 +343,7 @@ export default function App() {
 
     try {
       showToast('Generating Master Format Excel file...');
-      const res = await fetch('/api/export-excel', {
+      const res = await fetch(`${API_BASE_URL}/export-excel`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ records: exportList })

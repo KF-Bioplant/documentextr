@@ -51,7 +51,9 @@ def get_configured_models() -> list[str]:
 MONGODB_URI = _env("MONGODB_URI")
 MONGODB_DB = _env("MONGODB_DB", "kf_bio_plant")
 
-CORS_ORIGINS = [o.strip() for o in _env("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",") if o.strip()]
+_configured_origins = [o.strip().rstrip("/") for o in (_env("CORS_ORIGINS") or "").split(",") if o.strip()]
+_default_origins = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000", "http://127.0.0.1:3000"]
+CORS_ORIGINS = list(dict.fromkeys(_configured_origins + _default_origins)) if _configured_origins else _default_origins
 
 DATA_DIR = Path(_env("DATA_DIR") or (BACKEND_DIR / "data"))
 
