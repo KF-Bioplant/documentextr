@@ -1,0 +1,19 @@
+# Frontend
+node_modules/
+dist/
+build/
+coverage/
+
+# Backend
+.venv/
+__pycache__/
+*.pyc
+backend/data/
+
+# Environment
+.env*
+!.env.example
+
+# OS / logs
+.DS_Store
+*.log
