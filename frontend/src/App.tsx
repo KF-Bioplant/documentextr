@@ -11,6 +11,12 @@ import { calculateEmployeeTotalExperience } from './utils/experienceCalculator';
 import { applySortedBulletedFormatting } from './utils/listFormatter';
 import { API_BASE_URL } from './config';
 
+// A blank enrichment code means the column does not apply to this company
+function pickCode(current: string | undefined, enriched: string): string {
+  if (enriched === '') return '';
+  return current && current !== '-' ? current : enriched;
+}
+
 function ensureEnrichedRecord(rec: MasterEmployeeRecord): MasterEmployeeRecord {
   const prb = (rec.PRB_DT && rec.PRB_DT !== '-')
     ? rec.PRB_DT
@@ -29,12 +35,12 @@ function ensureEnrichedRecord(rec: MasterEmployeeRecord): MasterEmployeeRecord {
 
   const normalized: MasterEmployeeRecord = {
     ...rec,
-    DESIG_CODE: (rec.DESIG_CODE && rec.DESIG_CODE !== '-') ? rec.DESIG_CODE : enrichment.DESIG_CODE,
-    F_DESIG_CODE: (rec.F_DESIG_CODE && rec.F_DESIG_CODE !== '-') ? rec.F_DESIG_CODE : enrichment.F_DESIG_CODE,
-    DEPT_CODE: (rec.DEPT_CODE && rec.DEPT_CODE !== '-') ? rec.DEPT_CODE : enrichment.DEPT_CODE,
-    F_DEPT_CODE: (rec.F_DEPT_CODE && rec.F_DEPT_CODE !== '-') ? rec.F_DEPT_CODE : enrichment.F_DEPT_CODE,
-    SECTION_CODE: (rec.SECTION_CODE && rec.SECTION_CODE !== '-') ? rec.SECTION_CODE : enrichment.SECTION_CODE,
-    F_SECTION_CODE: (rec.F_SECTION_CODE && rec.F_SECTION_CODE !== '-') ? rec.F_SECTION_CODE : enrichment.F_SECTION_CODE,
+    DESIG_CODE: pickCode(rec.DESIG_CODE, enrichment.DESIG_CODE),
+    F_DESIG_CODE: pickCode(rec.F_DESIG_CODE, enrichment.F_DESIG_CODE),
+    DEPT_CODE: pickCode(rec.DEPT_CODE, enrichment.DEPT_CODE),
+    F_DEPT_CODE: pickCode(rec.F_DEPT_CODE, enrichment.F_DEPT_CODE),
+    SECTION_CODE: pickCode(rec.SECTION_CODE, enrichment.SECTION_CODE),
+    F_SECTION_CODE: pickCode(rec.F_SECTION_CODE, enrichment.F_SECTION_CODE),
     PRB_DT: prb,
     CONF_DT: conf,
     PreviousExperience: exp.previousExperienceText,

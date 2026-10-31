@@ -253,27 +253,84 @@ def _has(pattern: str, text: str) -> bool:
 
 def detect_company(value: Optional[str] = None, file_name: Optional[str] = None) -> str:
     text = f"{value or ''} {file_name or ''}".lower()
-    if "futura" in text:
+    is_futura = "futura" in text
+    is_kf = re.search(r"\bkf\b|kf\s*bioplants?|kfbioplants?|kf\s*bio", text) is not None
+    # Both companies mentioned is ambiguous, so leave the company blank.
+    if is_futura and is_kf:
+        return ""
+    if is_futura:
         return "FUTURA"
-    if re.search(r"kf\s*bioplants?|kfbioplants?|kf\s*bio", text):
+    if is_kf:
         return "KF"
     return ""
 
 
+# Spelling variants seen on forms, rewritten to one canonical form on both the
+# form value and the master name, so "Sr Exec" and "Senior Executive" compare equal.
+_CANONICAL_PHRASES: list[tuple[str, str]] = [
+    (r"\bco ?ordinator\b", "coordinator"),
+    (r"\bhouse ?keeping\b|\bhsk\b", "housekeeping"),
+    (r"\bgreen ?house\b|\bgh\b", "greenhouse"),
+    (r"\bbottle ?wash(ing)?\b", "bw"),
+    (r"\bpre ?dispatch\b", "predispatch"),
+    (r"\bhuman resources?\b", "hr"),
+    (r"\bresearch and development\b|\br and d\b|\brnd\b", "rd"),
+]
+_CANONICAL_WORDS: dict[str, str] = {
+    "asst": "assistant", "ast": "assistant",
+    "sr": "senior", "snr": "senior",
+    "jr": "junior",
+    "dy": "deputy", "dep": "deputy", "dept": "deputy",
+    "exe": "executive", "exec": "executive", "execue": "executive", "execute": "executive",
+    "mgr": "manager",
+    "comp": "computer",
+    "tech": "technical",
+    "makt": "marketing", "mkt": "marketing",
+    "develop": "development",
+    "administrator": "admin", "administration": "admin",
+    "engg": "engineer",
+}
+
+
+def _canonical(value: Optional[str]) -> str:
+    text = normalize(value)
+    for pattern, repl in _CANONICAL_PHRASES:
+        text = re.sub(pattern, repl, text)
+    words = []
+    for word in text.split():
+        word = _CANONICAL_WORDS.get(word, word)
+        # Plural forms ("Stores", "Accounts", "Operations") match their singular
+        if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
+            word = word[:-1]
+        words.append(word)
+    return " ".join(words)
+
+
+def _contains_words(text: str, phrase: str) -> bool:
+    return f" {phrase} " in f" {text} "
+
+
 def get_code(code_map: CodeMap, value: Optional[str] = None) -> str:
-    key = normalize(value)
+    key = _canonical(value)
     if not key:
         return "-"
 
-    for name, code in code_map.items():
-        if normalize(name) == key:
+    names = [(_canonical(name), code) for name, code in code_map.items()]
+
+    for name, code in names:
+        if name == key:
             return code
 
-    # Partial / substring matching for flexible OCR extraction
-    for name, code in code_map.items():
-        norm_name = normalize(name)
-        if norm_name in key or key in norm_name:
-            return code
+    # Master names written inside the form value: the longest (most specific) wins,
+    # so "Senior Executive" maps to Sr. Executive rather than Executive.
+    contained = [(name, code) for name, code in names if _contains_words(key, name)]
+    if contained:
+        return max(contained, key=lambda item: len(item[0]))[1]
+
+    # Form value is a shortened master name ("Media Dispensary"): only when unambiguous
+    containing = {code for name, code in names if _contains_words(name, key)}
+    if len(containing) == 1:
+        return containing.pop()
 
     return "-"
 
@@ -405,6 +462,7 @@ def get_kf_designation_code(designation: Optional[str] = None) -> str:
         (r"sr\s*exec|senior\s*executive", "36"),
         (r"sr\s*manager|senior\s*manager", "37"),
         (r"sr\s*sup|senior\s*supervisor", "39"),
+        (r"\bgm\b|gen\s*manager", "22"),
     ]
     for pattern, code in rules:
         if _has(pattern, norm):
@@ -428,6 +486,10 @@ def get_futura_department_code(department: Optional[str] = None) -> str:
     norm = normalize(department)
     if not norm:
         return "-"
+
+    # Futura has a plain HR department, so "HR & Admin" belongs to HR, not Admin
+    if _has(r"\bhr\b|human\s*res", norm):
+        return "21"
 
     direct = get_code(FUTURA_DEPARTMENT_CODES, department)
     if direct != "-":
@@ -575,8 +637,14 @@ def get_department_code(company: str, department: Optional[str] = None) -> str:
     return "-"
 
 
+def _lab_short_form(norm: str) -> str:
+    """Recruiter short forms "Futura-2", "kf-3", "L-1", "F2" -> "lab 2"; other text unchanged."""
+    m = re.search(r"\b(?:lab|l|futura|kf|f)\s*0?([1-3])\b", norm)
+    return f"lab {m.group(1)}" if m else norm
+
+
 def get_futura_section_code(section: Optional[str] = None) -> str:
-    norm = normalize(section)
+    norm = _lab_short_form(normalize(section))
     if not norm:
         return "-"
 
@@ -592,7 +660,7 @@ def get_futura_section_code(section: Optional[str] = None) -> str:
 
 
 def get_kf_section_code(section: Optional[str] = None) -> str:
-    norm = normalize(section)
+    norm = _lab_short_form(normalize(section))
     if not norm:
         return "-"
 
@@ -856,17 +924,21 @@ def enrich_employee_record(
     sec_code = get_kf_section_code(lab_details or "")
     f_sec_code = get_futura_section_code(lab_details or "")
 
-    if company == "KF":
-        f_desig_code = f_dept_code = f_sec_code = ""
-    elif company == "FUTURA":
+    # Codes are only valid for KF Bioplants or Futura; any other / unknown company gets blank codes.
+    if company not in ("KF", "FUTURA"):
+        company = ""
+    if company != "KF":
         desig_code = dept_code = sec_code = ""
+    if company != "FUTURA":
+        f_desig_code = f_dept_code = f_sec_code = ""
 
     probation = calculate_probation_date(join_dt, desig)
     confirmation = calculate_confirmation_date(probation) if probation != "-" else "-"
 
     needs_review = (
-        (bool(desig) and desig_code == "-" and f_desig_code == "-")
-        or (bool(dept_name) and dept_code == "-" and f_dept_code == "-")
+        not company
+        or (bool(desig) and "-" in (desig_code, f_desig_code))
+        or (bool(dept_name) and "-" in (dept_code, f_dept_code))
         or (bool(join_dt) and probation == "-")
     )
 

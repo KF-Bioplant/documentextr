@@ -50,7 +50,9 @@ EMPLOYEE_RECORD_JSON_SCHEMA: dict = {
     "type": "OBJECT",
     "properties": {
         "confidenceScore": {"type": "NUMBER"},
-        "COMPANY": _str("KF or FUTURA"),
+        "COMPANY_SOURCE": _str("Where the company was found for THIS candidate: WRITTEN, LOGO, or NONE"),
+        "COMPANY_EVIDENCE": _str("Exact text quoted from this candidate's pages that names the company, and which field it is in"),
+        "COMPANY": _str("KF, FUTURA, or empty if both or neither appear (form text first, then header logo)"),
         "DESIG_CODE": _str(),
         "DEPT_CODE": _str(),
         "SECTION_CODE": _str(),
@@ -123,7 +125,7 @@ EMPLOYEE_RECORD_JSON_SCHEMA: dict = {
                     "fromDate": _str("Start date DD/MM/YYYY or YYYY"),
                     "toDate": _str("End date DD/MM/YYYY or YYYY"),
                     "lastDesignation": _str("Designation / Position"),
-                    "emoluments": _str("Salary / CTC / Emoluments"),
+                    "emoluments": _str("Salary as written, with period e.g. '15,000 / month'"),
                     "industry": _str("Industry / Sector"),
                     "reasonForLeaving": _str("Reason for leaving"),
                 }),
@@ -138,6 +140,8 @@ EMPLOYEE_RECORD_JSON_SCHEMA: dict = {
     },
     "required": ["NAME"],
 }
+# The model writes fields in this order, so it states its company evidence before deciding COMPANY
+EMPLOYEE_RECORD_JSON_SCHEMA["propertyOrdering"] = list(EMPLOYEE_RECORD_JSON_SCHEMA["properties"])
 
 RESPONSE_SCHEMA: dict = {
     "type": "OBJECT",
@@ -166,25 +170,54 @@ Read all supplied images/pages/PDF documents with maximum optical precision. Ext
 2. Forms for MULTIPLE DIFFERENT candidates:
    * IF THE UPLOADED DOCUMENTS CONTAIN FORMS FOR DIFFERENT EMPLOYEES:
      Extract EACH candidate as an individual complete item in the 'records' array. Ensure all fields are thoroughly populated for every candidate.
+   * Each "Checklist recruitment" sheet starts a new candidate; the application form / data form / offer letter that follows with the same name belongs to that candidate. Count the different candidate names first and return exactly one record per name. Never merge two candidates with different names.
+   * Decide EVERY field (especially COMPANY, DESIG, JOIN_DT, DEPT_NAME, LabDetails) separately for each candidate, using ONLY that candidate's own pages. Never copy a value from one candidate to another.
+3. Typical document set per candidate: a pink "L-Checklist recruitment" sheet (recruiter's handwritten notes), a Marathi application form, sometimes an English "PERSONAL DATA FORM", and sometimes a typed offer letter ("नोकरी हमी पत्र").
+   * For name spelling, prefer the typed offer letter, then the clearest handwriting.
+
+--- NEVER INVENT DATA ---
+- Leave a field "" when it is not written for that candidate. Do not fill a field with a typical value, a value from another field, or a value from another candidate.
+- The printed company letterhead (address "सर्व्हे नं. 129/123 सी, मांजरी (बुद्रुक) ... पुणे - 412 307", phone 020 26948400) is the COMPANY's address. Never use it, or its pincode 412307, for any candidate field. Use 412307 only if the candidate wrote it in their own address.
 
 --- FIELD-BY-FIELD EXTRACTION SPECIFICATIONS ---
-- COMPANY: Identify if the document is from "KF" (KF Bioplants / Kumar GenTech) or "FUTURA" (Futura Biotech). Return "KF", "FUTURA", or "".
-- NAME: Extract complete full name (Surname, First Name, Middle/Father Name). Clean up OCR noise.
+- COMPANY: Return "KF" (KF Bioplants), "FUTURA" (Futura), or "". Decide strictly in this order:
+  1. WRITTEN ON THE FORM FIRST: Look at what is written for THIS candidate (outside the printed header/letterhead): the LAB field and the notes beside it, the DOJ / joining notes, the recruiter's notes on the checklist, stamps, and the typed offer letter's text (e.g. "Futura_2 (PIR)", "Lab-1 (PIR)" under a Futura logo, "करिता, फुचूरा बायोप्लान्टस").
+     * Short forms count: "Futura-2", "Futura Lab-1", "F-2" -> Futura; "KF Disp", "kf-3", "KF Lab 1" -> KF.
+     * If ONLY KF is written -> "KF". If ONLY Futura is written -> "FUTURA".
+     * If BOTH KF and Futura are written for this candidate (and one is not crossed out) -> return "".
+     * A crossed-out / struck-through value does not count (e.g. "KF Lab 2" struck out and "Futura-2" written beside it -> "FUTURA").
+  2. LOGO / LETTERHEAD SECOND: Only if nothing is written, look at the printed logo or header of the form.
+     * "KF Bioplants" logo (e.g. top-left of the English "PERSONAL DATA FORM") -> "KF". "Futura Bioplants" logo -> "FUTURA".
+     * The Marathi form letterhead "के.एफ./फ्युच्युरा बायोप्लांटस प्रा. लि." means "KF / Futura Bioplants": it names BOTH companies, so on its own it gives "".
+  3. Otherwise return "". Never guess the company from designation, department, or any other field.
+  * Only KF Bioplants and Futura are valid. Any other company (e.g. "Kumar Bioseeds and Agro Products LLP") -> "".
+  * IGNORE company/lab text that belongs to someone else: references ("Reference Name / Lab: Neha Sawant -> Futura-2 (31089)", "परिचयदात्याचे नाव: ... kf-3 (000091)"), and the candidate's previous / present employers. A reference's lab shows where the REFERENCE works, not the candidate.
+  * Fill COMPANY_SOURCE ("WRITTEN", "LOGO" or "NONE") and COMPANY_EVIDENCE (quote the exact text and name its field, e.g. "LAB: Futura-2 (PIR)", "checklist top note: kf Disp.", "logo: KF Bioplants on PERSONAL DATA FORM"). If the only mention is in a reference, the letterhead, or an employer -> COMPANY_SOURCE "NONE", COMPANY "".
+- NAME: Complete full name, always in the order "First Middle Surname" (e.g. "Pooja Ganesh Ubale"), even when the form writes the surname first (Marathi "आडनाव नाव वडिलांचे" = Surname First Middle). Clean up OCR noise.
 - BIRTH_DT: Date of birth strictly formatted as DD/MM/YYYY.
 - Gender: Determine if the candidate is "Male" or "Female".
   * HANDWRITTEN TICKS / CHECKBOXES: Look closely at gender options on paper forms (e.g. "M [ ] F [ ]", "Male / Female", "M / F", or checkboxes next to M and F).
   * A checkmark (✓), tick, cross (X), dot, circle, highlight, pen stroke, or box select on/near "M" or "Male" means "Male".
   * A checkmark (✓), tick, cross (X), dot, circle, highlight, pen stroke, or box select on/near "F" or "Female" means "Female".
   * If handwritten "M" or "Male" -> "Male". If handwritten "F" or "Female" -> "Female".
+  * The Marathi form has no gender field. Infer it from: the declaration "मी लिहून देतो / देते" (the word NOT struck out: देतो = Male, देते = Female), checklist questions filled about a husband ("Husbands income profession", "Pregnancy plan") = Female, or a clearly male / female first name.
 - MaritalStatus: "Single", "Married", "Unmarried", "Divorced", or "Widowed". Check checkboxes or text.
-- DESIG: Exact designation / post applied for (e.g., Trainee Executive, Field Assistant, Supervisor, Asst. Manager, Operator, etc.).
-- JOIN_DT: Date of joining strictly formatted as DD/MM/YYYY.
-- DEPT_NAME: Department name (e.g., Production, HR & Admin, Stores, Lab 01, R & D, Maintenance, Accounts, Marketing, Pre-Dispatch).
-- LabDetails: Lab / section details (e.g., Lab 01, Lab 02, Lab 03, Staff, Support Staff, Green House, etc.).
+  * Marathi "अविवाहीत / विवाहीत": the ticked, circled or underlined option (the struck-out one is NOT chosen). If unclear, a number of children (अपत्यांची संख्या) of 1 or more, or the checklist option "Married (with one or two children)" being ticked, means "Married".
+- Third name on the Marathi form ("वडिलांचे/पतीचे नाव" = father's OR husband's name): for a married woman it is her husband -> SpouseName "<that name> <surname>"; otherwise it is the father -> FatherName "<that name> <surname>". Father / Mother full names written on the checklist always go to FatherName / MotherName.
+- DESIG: The post this candidate is applying for / offered at KF or Futura, ONLY from: "Position applied", "अर्ज करीत असलेले पद/हुद्दा", a designation written beside the LAB / DOJ notes (e.g. "Trainee"), or the offer letter ("ट्रेनी" = Trainee, "ट्रेनी/अप्रेन्टिस" = Trainee). If none of these is filled, return "".
+  * Never take DESIG from qualification notes (e.g. "M.com" written at the top is a qualification), or from the candidate's present / previous job titles.
+- JOIN_DT: Joining date at KF / Futura (DD/MM/YYYY), ONLY from an explicit joining date: "DOJ", "Date of Joining", a date written beside the LAB / Trainee notes on the checklist, or the reporting date in the offer letter ("दि. 01-07-2026 ... हजर राहणे").
+  * NOT the form-filled date ("दिनांक", "Date:" at the bottom, signature dates), NOT the approval date, and NOT the joining date at the candidate's present / previous employer. If not written, return "".
+- DEPT_NAME: Department at KF / Futura. Recruiters write it in short form beside LAB or in the offer letter heading: "(PIR)" -> "PIR", "Disp" / "Disp." -> "Dispatch", "MPR", "PGR", "MSR", "HSK", "Prod" -> "Production", "GH" -> "Green House". Return "" if not written for this candidate.
+- LabDetails: The candidate's own lab / section, normalised: "Lab-1", "Futura Lab-1", "Futura-2", "kf-3", "L-2" -> "Lab 01" / "Lab 02" / "Lab 03"; or "Staff" / "Support Staff". Do not put the company or department here (for "KF Disp." -> COMPANY "KF", DEPT_NAME "Dispatch", LabDetails "").
+  * Never take DEPT_NAME or LabDetails from a reference's lab ("Reference: Neha Sawant -> Futura-2" is the reference's lab).
 - EPAN_NO: 10-character PAN number (e.g. ABCDE1234F).
 - EMAILID: Email address.
 - Address1 & Pin1: Permanent / native address and 6-digit pincode.
 - Address2 & Pin2: Present / local / mailing address and 6-digit pincode. If marked "Same as above", "Same", or left blank because it matches permanent, duplicate Address1 and Pin1.
+  * On the Marathi form: field 3 "सध्याचा संपूर्ण पत्ता" = PRESENT address -> Address2 / Pin2; field 4 "कायमस्वरूपी पत्ता" = PERMANENT address -> Address1 / Pin1. Keep them separate; a pincode belongs only to the address it is written in.
+  * A ditto mark ("-||-", "--\"--", "do", "same") in one address means it is the same as the other address: copy it.
+  * Marathi form field map: 1 पद/हुद्दा = DESIG, 2 संपूर्ण नाव (आडनाव, नाव, वडिलांचे/पतीचे नाव = surname, first name, father's/husband's name), 5 फोन/मो.नं = mobiles, 6 जन्मतारीख = BIRTH_DT and वय = age, वैवाहिक स्थिती अविवाहीत/विवाहीत = Unmarried/Married (the ticked or underlined one), 7 अपत्यांची संख्या = number of children, 8 शैक्षणिक पात्रता = qualification, 9 अवगत भाषा = languages, 11 पूर्वीचा कामाचा अनुभव = previous experience, 12 परिचयदात्याचे नाव = ReferenceName. "नाही" / "—" means none -> "".
 - ADHAR_NO: 12-digit Aadhaar / UID number.
 - PF_UAN: 12-digit Universal Account Number for Provident Fund.
 - ESI_Number: ESI / IP insurance number.
@@ -205,11 +238,17 @@ Read all supplied images/pages/PDF documents with maximum optical precision. Ext
   Extract level, courseName, institute, boardUniversity, cityState, passYear, percentageOrCgpa.
 
 - PREVIOUS EMPLOYMENT RECORDS ('extendedDetails.previousEmployments'):
-  Extract ALL past employers and work experiences visible in the work history table:
-  organizationName, duration (e.g. "01/04/2019 to 30/11/2022"), fromDate, toDate, lastDesignation, emoluments, industry, reasonForLeaving.
+  Extract ALL past employers and work experiences: the work history table AND handwritten notes anywhere on the pages (e.g. the recruiter's notes at the bottom of the Marathi form: "Cloudzia Outsourcing as CSR 1 year ... 12000", "Axis Max Life Insurance - 10 years - 28900", "Teacher - 4 year - Shree Swami Samarth Public School - 6000").
+  organizationName, duration (e.g. "01/04/2019 to 30/11/2022", or "10 years" when only a length is written), fromDate, toDate, lastDesignation, emoluments, industry, reasonForLeaving.
+  * Always fill duration when any length of service is written ("1 year", "1.5 year", "3 Year"), so experience can be calculated.
+  * emoluments: This is the salary exactly as the candidate wrote it, NOT a CTC. Candidates usually write the monthly salary. Copy the amount as written and state the period: append " / month" when it is a monthly amount (e.g. "15,000 / month"), or " / annum" only if the form explicitly says per annum / yearly / LPA. If the period is unclear, treat amounts below 1,00,000 as monthly. Never convert or multiply the amount.
+  * When the table has separate Joining and Leaving salary columns, keep both: "13,500 to 16,500 / month". Read each digit carefully.
 
 - PRESENT EMPLOYMENT (PresentEmployment):
-  Extract present company name, designation, department, starting date, and salary.
+  Extract the candidate's CURRENT employer before joining us: company name, designation, place, starting date, and salary.
+  * A reference's name is never an employer: do not put ReferenceName into previous or present employment (in any script, e.g. "कस्तुरी रसाळे" = "Kasturi Rasale").
+  * "Housewife", "गृहिणी", "नाही", "—" are not work experience -> no previous employment entry.
+  * The KF / Futura offer or the lab being joined is NOT present employment. If the candidate is not currently employed, return "".
 
 - REFERENCE NAME (ReferenceName):
   Extract professional/personal references listed on the form (names, designations, companies, contact numbers).
@@ -237,6 +276,8 @@ def _compact(key: str) -> str:
 
 
 def _lookup(source: dict, possible_keys: list[str]) -> Optional[str]:
+    # Lists / objects (e.g. an empty "academics" array) are not field text, never stringify them
+    source = {k: v for k, v in source.items() if not isinstance(v, (list, dict))}
     for key in possible_keys:
         if source.get(key) is not None:
             val = str(source[key]).strip()
@@ -318,6 +359,41 @@ def normalize_gender(gender: str) -> str:
     return gender
 
 
+def _reference_person(reference_name: str) -> str:
+    """The person's name part of a reference such as "Kasturi Rasale - Futura-2 (32521)"."""
+    person = _compact(re.split(r"[-(,/>→]", reference_name or "")[0])
+    # Generic sources, not a person ("Self", "Walk in", "Pamplet" leaflet ad)
+    return "" if person in ("self", "walkin", "pamplet", "pamphlet", "none", "na") else person
+
+
+def _is_reference(text: Any, ref_key: str) -> bool:
+    return len(ref_key) >= 4 and ref_key in _compact(str(text or ""))
+
+
+def _drop_reference_jobs(jobs: list, reference_name: str) -> list:
+    # The model sometimes lists the reference person as a previous employer
+    ref_key = _reference_person(reference_name)
+    return [j for j in jobs if not (isinstance(j, dict) and _is_reference(j.get("organizationName"), ref_key))]
+
+
+def _drop_reference_lines(text: str, reference_name: str) -> str:
+    ref_key = _reference_person(reference_name)
+    return "\n".join(line for line in (text or "").split("\n") if not _is_reference(line, ref_key))
+
+
+_NOT_CANDIDATE_COMPANY = re.compile(r"refer|परिचय|के\.?\s*एफ\.?\s*/\s*फ्यु", re.IGNORECASE)
+
+
+def _company_evidence_ok(data: dict) -> bool:
+    """False when the AI's own evidence shows the company came from a reference or the
+    shared KF/Futura letterhead, neither of which identifies the candidate's company."""
+    source = str(data.get("COMPANY_SOURCE") or "").strip().upper()
+    evidence = str(data.get("COMPANY_EVIDENCE") or "")
+    if not source and not evidence:
+        return True  # older responses without evidence fields
+    return source != "NONE" and not _NOT_CANDIDATE_COMPANY.search(evidence)
+
+
 def _new_record_id(index: int) -> str:
     suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=5))
     return f"rec_{int(time.time() * 1000)}_{index}_{suffix}"
@@ -348,7 +424,9 @@ def process_extracted_employee(data: dict, default_file_name: str, index: int = 
     department = f(["DEPT_NAME", "dept_name", "deptName", "department", "Department"])
     lab_details = f(["LabDetails", "labDetails", "lab_details", "lab", "Lab"])
     company_input = f(["COMPANY", "company", "companyName", "Company"])
-    company = detect_company(company_input or lab_details, default_file_name)
+    if not _company_evidence_ok(data):
+        company_input = ""
+    company = detect_company(company_input or lab_details)
 
     enrichment = enrich_employee_record(company, lab_details, designation, join_date, department)
 
@@ -381,7 +459,8 @@ def process_extracted_employee(data: dict, default_file_name: str, index: int = 
         confirmation_date = f(["CONF_DT", "conf_dt", "confirmationDate"], "-")
 
     epan = f(["EPAN_NO", "epan_no", "epanNo", "pan", "panNo", "pan_no", "PAN", "panNumber"], "-")
-    email = f(["EMAILID", "emailId", "email_id", "email", "Email", "emailAddress"])
+    # Handwritten emails are often read with spaces ("name 850 @gmail.com"); emails never contain them
+    email = re.sub(r"\s+", "", f(["EMAILID", "emailId", "email_id", "email", "Email", "emailAddress"])).lower()
     addr1 = f(["Address1", "address1", "address_1", "permanentAddress", "permanent_address", "nativeAddress",
                "native_address", "address", "Address"])
     addr2 = f(["Address2", "address2", "address_2", "presentAddress", "present_address", "mailingAddress",
@@ -389,11 +468,18 @@ def process_extracted_employee(data: dict, default_file_name: str, index: int = 
     pin1 = f(["Pin1", "pin1", "pin_1", "pincode1", "pincode_1", "pinCode1", "pincode", "pin"])
     pin2 = f(["Pin 2", "Pin2", "pin2", "pin_2", "pincode2", "pincode_2", "pinCode2"])
 
-    addr2_lower = addr2.lower()
-    if addr1 and (not addr2 or addr2 == "-" or "same as" in addr2_lower or addr2_lower in ("same", "as above", "do")):
+    def _is_same_marker(addr: str) -> bool:
+        low = addr.lower().strip()
+        return not low or low == "-" or "same as" in low or low in ("same", "as above", "do") or bool(re.fullmatch(r"[-|\"'\s]+", low))
+
+    if addr1 and _is_same_marker(addr2):
         addr2 = addr1
         if (not pin2 or pin2 == "-") and pin1 and pin1 != "-":
             pin2 = pin1
+    elif addr2 and _is_same_marker(addr1):
+        addr1 = addr2
+        if (not pin1 or pin1 == "-") and pin2 and pin2 != "-":
+            pin1 = pin2
 
     adhar = f(["ADHAR_NO", "adhar_no", "adharNo", "aadhar", "aadhar_no", "aadharNo", "aadhaar", "aadhaar_no", "uid",
                "UID", "Aadhar"], "-")
@@ -453,19 +539,23 @@ def process_extracted_employee(data: dict, default_file_name: str, index: int = 
     if (not qualification or qualification == "-") and academics:
         qualification = format_qualifications_list(academics)
 
-    previous_jobs = _ext_list(data, "previousEmployments")
-    prev_employment = f(["PreviousEmployment", "previous_employment", "previousEmployment", "experience", "workExperience"])
+    reference_name = f(["ReferenceName", "reference_name", "referenceName", "references", "reference"])
+
+    previous_jobs = _drop_reference_jobs(_ext_list(data, "previousEmployments"), reference_name)
+    prev_employment = _drop_reference_lines(
+        f(["PreviousEmployment", "previous_employment", "previousEmployment", "experience", "workExperience"]),
+        reference_name,
+    )
     if (not prev_employment or prev_employment == "-") and previous_jobs:
         prev_employment = format_previous_employments_list(previous_jobs)
 
     present_employment = f(["PresentEmployment", "present_employment", "presentEmployment"])
-    reference_name = f(["ReferenceName", "reference_name", "referenceName", "references", "reference"])
 
     family_members = _family_members(data)
     extended_details = {
         **ext_raw,
         "academics": academics or ext_raw.get("academics") or [],
-        "previousEmployments": previous_jobs or ext_raw.get("previousEmployments") or [],
+        "previousEmployments": previous_jobs,
         "familyMembers": family_members,
     }
 
@@ -493,7 +583,7 @@ def process_extracted_employee(data: dict, default_file_name: str, index: int = 
         "F_DEPT_CODE": f_dept_code,
         "SECTION_CODE": section_code,
         "F_SECTION_CODE": f_section_code,
-        "codeMappingStatus": "MAPPED" if (company and desig_code != "-" and dept_code != "-") else "REVIEW_REQUIRED",
+        "codeMappingStatus": enrichment["codeMappingStatus"],
         "NAME": name,
         "BIRTH_DT": birth_dt,
         "Gender": gender,
@@ -547,7 +637,7 @@ def _filled(value: Any) -> bool:
 
 def enrich_incoming_record(rec: dict) -> dict:
     """Recomputes codes, probation/confirmation dates and experience for a record coming from the client."""
-    company = rec.get("COMPANY") or detect_company(rec.get("LabDetails"), rec.get("fileName"))
+    company = rec.get("COMPANY") or detect_company(rec.get("LabDetails"))
     enrichment = enrich_employee_record(
         company,
         rec.get("LabDetails") or "",
@@ -577,6 +667,9 @@ def enrich_incoming_record(rec: dict) -> dict:
     exp = calculate_employee_total_experience(rec)
 
     def keep_or(field: str) -> str:
+        # A blank enrichment code means the column does not apply to this company
+        if enrichment[field] == "":
+            return ""
         return rec[field] if _filled(rec.get(field)) else enrichment[field]
 
     normalized = {
@@ -672,6 +765,7 @@ async def extract_employee_records_from_parts(
                     response_mime_type="application/json",
                     response_schema=RESPONSE_SCHEMA,
                     max_output_tokens=8192,
+                    temperature=0,
                 ),
             )
         except Exception as schema_err:  # noqa: BLE001
@@ -687,6 +781,7 @@ async def extract_employee_records_from_parts(
                     ),
                     response_mime_type="application/json",
                     max_output_tokens=8192,
+                    temperature=0,
                 ),
             )
 

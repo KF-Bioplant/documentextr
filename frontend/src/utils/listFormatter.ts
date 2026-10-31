@@ -288,7 +288,7 @@ export function formatSinglePreviousJobLine(job: PreviousJob): string {
 
   // Emoluments & Reason for leaving
   const meta: string[] = [];
-  if (job.emoluments && job.emoluments !== '-') meta.push(`CTC: ${job.emoluments.trim()}`);
+  if (job.emoluments && job.emoluments !== '-') meta.push(`Salary: ${job.emoluments.trim()}`);
   if (job.industry && job.industry !== '-') meta.push(`Industry: ${job.industry.trim()}`);
   if (job.reasonForLeaving && job.reasonForLeaving !== '-') meta.push(`Reason: ${job.reasonForLeaving.trim()}`);
   if (meta.length > 0) {

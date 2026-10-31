@@ -234,7 +234,7 @@ def format_single_previous_job_line(job: dict[str, Any]) -> str:
         parts.append(f"({duration_str})")
 
     meta: list[str] = []
-    for key, label in (("emoluments", "CTC"), ("industry", "Industry"), ("reasonForLeaving", "Reason")):
+    for key, label in (("emoluments", "Salary"), ("industry", "Industry"), ("reasonForLeaving", "Reason")):
         if job.get(key) and job.get(key) != "-":
             meta.append(f"{label}: {_s(job.get(key)).strip()}")
     if meta:

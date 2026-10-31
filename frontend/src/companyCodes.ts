@@ -236,40 +236,77 @@ const normalize = (value: string | undefined | null): string =>
     .replace(/\s+/g, ' ')
     .trim();
 
-function uniqueNormalizedLookup(map: CodeMap): Map<string, string> {
-  const result = new Map<string, string>();
-  Object.entries(map).forEach(([name, code]) => {
-    const key = normalize(name);
-    if (!result.has(key)) result.set(key, code);
-  });
-  return result;
+// Spelling variants seen on forms, rewritten to one canonical form on both the
+// form value and the master name, so "Sr Exec" and "Senior Executive" compare equal.
+const CANONICAL_PHRASES: Array<[RegExp, string]> = [
+  [/\bco ?ordinator\b/g, 'coordinator'],
+  [/\bhouse ?keeping\b|\bhsk\b/g, 'housekeeping'],
+  [/\bgreen ?house\b|\bgh\b/g, 'greenhouse'],
+  [/\bbottle ?wash(ing)?\b/g, 'bw'],
+  [/\bpre ?dispatch\b/g, 'predispatch'],
+  [/\bhuman resources?\b/g, 'hr'],
+  [/\bresearch and development\b|\br and d\b|\brnd\b/g, 'rd']
+];
+const CANONICAL_WORDS: Record<string, string> = {
+  asst: 'assistant', ast: 'assistant',
+  sr: 'senior', snr: 'senior',
+  jr: 'junior',
+  dy: 'deputy', dep: 'deputy', dept: 'deputy',
+  exe: 'executive', exec: 'executive', execue: 'executive', execute: 'executive',
+  mgr: 'manager',
+  comp: 'computer',
+  tech: 'technical',
+  makt: 'marketing', mkt: 'marketing',
+  develop: 'development',
+  administrator: 'admin', administration: 'admin',
+  engg: 'engineer'
+};
+
+function canonical(value: string | undefined | null): string {
+  let text = normalize(value);
+  for (const [pattern, repl] of CANONICAL_PHRASES) text = text.replace(pattern, repl);
+  return text
+    .split(' ')
+    .filter(Boolean)
+    .map((w) => {
+      const word = CANONICAL_WORDS[w] ?? w;
+      // Plural forms ("Stores", "Accounts", "Operations") match their singular
+      return word.length > 3 && word.endsWith('s') && !word.endsWith('ss') ? word.slice(0, -1) : word;
+    })
+    .join(' ');
 }
+
+const containsWords = (text: string, phrase: string): boolean => ` ${text} `.includes(` ${phrase} `);
 
 export function detectCompany(value?: string, fileName?: string): CompanyCode {
   const text = `${value || ''} ${fileName || ''}`.toLowerCase();
-  if (/futura/.test(text)) return 'FUTURA';
-  if (/kf\s*bioplants?|kfbioplants?|kf\s*bio/.test(text)) return 'KF';
+  const isFutura = /futura/.test(text);
+  const isKf = /\bkf\b|kf\s*bioplants?|kfbioplants?|kf\s*bio/.test(text);
+  // Both companies mentioned is ambiguous, so leave the company blank.
+  if (isFutura && isKf) return '';
+  if (isFutura) return 'FUTURA';
+  if (isKf) return 'KF';
   return '';
 }
 
 export function getCode(map: CodeMap, value?: string): string {
-  const key = normalize(value);
+  const key = canonical(value);
   if (!key) return '-';
-  const lookup = uniqueNormalizedLookup(map);
-  if (lookup.has(key)) return lookup.get(key)!;
+  const names = Object.entries(map).map(([name, code]) => [canonical(name), code] as const);
 
-  // Direct case-insensitive key search
-  for (const [name, code] of Object.entries(map)) {
-    if (normalize(name) === key) return code;
+  const exact = names.find(([name]) => name === key);
+  if (exact) return exact[1];
+
+  // Master names written inside the form value: the longest (most specific) wins,
+  // so "Senior Executive" maps to Sr. Executive rather than Executive.
+  const contained = names.filter(([name]) => containsWords(key, name));
+  if (contained.length) {
+    return contained.reduce((best, item) => (item[0].length > best[0].length ? item : best))[1];
   }
 
-  // Partial / substring matching for flexible OCR extraction
-  for (const [name, code] of Object.entries(map)) {
-    const normName = normalize(name);
-    if (key.includes(normName) || normName.includes(key)) {
-      return code;
-    }
-  }
+  // Form value is a shortened master name ("Media Dispensary"): only when unambiguous
+  const containing = new Set(names.filter(([name]) => containsWords(name, key)).map(([, code]) => code));
+  if (containing.size === 1) return [...containing][0];
 
   return '-';
 }
@@ -371,6 +408,7 @@ export function getKFDesignationCode(designation?: string): string {
   if (/sr\s*exec|senior\s*executive/i.test(norm)) return '36';
   if (/sr\s*manager|senior\s*manager/i.test(norm)) return '37';
   if (/sr\s*sup|senior\s*supervisor/i.test(norm)) return '39';
+  if (/\bgm\b|gen\s*manager/i.test(norm)) return '22';
 
   return '-';
 }
@@ -390,6 +428,9 @@ export function getDesignationCode(company: CompanyCode, designation?: string): 
 export function getFuturaDepartmentCode(department?: string): string {
   const norm = normalize(department);
   if (!norm) return '-';
+
+  // Futura has a plain HR department, so "HR & Admin" belongs to HR, not Admin
+  if (/\bhr\b|human\s*res/.test(norm)) return '21';
 
   const direct = getCode(FUTURA_DEPARTMENT_CODES, department);
   if (direct !== '-') return direct;
@@ -502,8 +543,14 @@ export function getDepartmentCode(company: CompanyCode, department?: string): st
   return '-';
 }
 
+// Recruiter short forms "Futura-2", "kf-3", "L-1", "F2" -> "lab 2"; other text unchanged.
+function labShortForm(norm: string): string {
+  const m = norm.match(/\b(?:lab|l|futura|kf|f)\s*0?([1-3])\b/);
+  return m ? `lab ${m[1]}` : norm;
+}
+
 export function getFuturaSectionCode(section?: string): string {
-  const norm = normalize(section);
+  const norm = labShortForm(normalize(section));
   if (!norm) return '-';
 
   if (/lab\s*0?1\b|lab1\b/i.test(norm)) return '01';
@@ -514,7 +561,7 @@ export function getFuturaSectionCode(section?: string): string {
 }
 
 export function getKFSectionCode(section?: string): string {
-  const norm = normalize(section);
+  const norm = labShortForm(normalize(section));
   if (!norm) return '-';
 
   if (/lab\s*0?2\b|lab2\b/i.test(norm)) return '01';
@@ -1096,7 +1143,9 @@ export interface EnrichmentOutput {
 }
 
 export function enrichEmployeeRecord(input: EnrichmentInput): EnrichmentOutput {
-  const COMPANY = input.COMPANY || detectCompany(input.LabDetails);
+  // Codes are only valid for KF Bioplants or Futura; any other / unknown company gets blank codes.
+  const detected = input.COMPANY || detectCompany(input.LabDetails);
+  const COMPANY: CompanyCode = detected === 'KF' || detected === 'FUTURA' ? detected : '';
   let desigCode = getKFDesignationCode(input.DESIG);
   let fDesigCode = getFuturaDesignationCode(input.DESIG);
   let deptCode = getKFDepartmentCode(input.DEPT_NAME);
@@ -1106,21 +1155,23 @@ export function enrichEmployeeRecord(input: EnrichmentInput): EnrichmentOutput {
   let secCode = getKFSectionCode(labText);
   let fSecCode = getFuturaSectionCode(labText);
 
-  if (COMPANY === 'KF') {
-    fDesigCode = '';
-    fDeptCode = '';
-    fSecCode = '';
-  } else if (COMPANY === 'FUTURA') {
+  if (COMPANY !== 'KF') {
     desigCode = '';
     deptCode = '';
     secCode = '';
+  }
+  if (COMPANY !== 'FUTURA') {
+    fDesigCode = '';
+    fDeptCode = '';
+    fSecCode = '';
   }
 
   const probation = calculateProbationDate(input.JOIN_DT, input.DESIG);
   const confirmation = probation !== '-' ? calculateConfirmationDate(probation) : '-';
 
-  const needsReview = (Boolean(input.DESIG) && desigCode === '-' && fDesigCode === '-') ||
-    (Boolean(input.DEPT_NAME) && deptCode === '-' && fDeptCode === '-') ||
+  const needsReview = !COMPANY ||
+    (Boolean(input.DESIG) && (desigCode === '-' || fDesigCode === '-')) ||
+    (Boolean(input.DEPT_NAME) && (deptCode === '-' || fDeptCode === '-')) ||
     (Boolean(input.JOIN_DT) && getProbationMonths(input.DESIG) !== null && probation === '-');
 
   return {
